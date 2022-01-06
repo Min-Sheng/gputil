@@ -43,7 +43,7 @@ import platform
 __version__ = '1.4.0'
 
 class GPU:
-    def __init__(self, ID, uuid, load, memoryTotal, memoryUsed, memoryFree, driver, gpu_name, serial, display_mode, display_active, temp_gpu):
+    def __init__(self, ID, uuid, load, memoryTotal, memoryUsed, memoryFree, driver, gpu_name, serial, display_mode, display_active, temp_gpu, compute_mode):
         self.id = ID
         self.uuid = uuid
         self.load = load
@@ -57,6 +57,7 @@ class GPU:
         self.display_mode = display_mode
         self.display_active = display_active
         self.temperature = temp_gpu
+        self.compute_mode = compute_mode
 
 def safeFloatCast(strNumber):
     try:
@@ -78,7 +79,7 @@ def getGPUs():
 	
     # Get ID, processing and memory utilization for all GPUs
     try:
-        p = Popen([nvidia_smi,"--query-gpu=index,uuid,utilization.gpu,memory.total,memory.used,memory.free,driver_version,name,gpu_serial,display_active,display_mode,temperature.gpu", "--format=csv,noheader,nounits"], stdout=PIPE)
+        p = Popen([nvidia_smi,"--query-gpu=index,uuid,utilization.gpu,memory.total,memory.used,memory.free,driver_version,name,gpu_serial,display_active,display_mode,temperature.gpu,compute_mode", "--format=csv,noheader,nounits"], stdout=PIPE)
         stdout, stderror = p.communicate()
     except:
         return []
@@ -96,8 +97,7 @@ def getGPUs():
         #print(line)
         vals = line.split(', ')
         #print(vals)
-        for i in range(12):
-            # print(vals[i])
+        for i in range(13):
             if (i == 0):
                 deviceIds = int(vals[i])
             elif (i == 1):
@@ -121,12 +121,14 @@ def getGPUs():
             elif (i == 10):
                 display_mode = vals[i]
             elif (i == 11):
-                temp_gpu = safeFloatCast(vals[i]);
-        GPUs.append(GPU(deviceIds, uuid, gpuUtil, memTotal, memUsed, memFree, driver, gpu_name, serial, display_mode, display_active, temp_gpu))
+                temp_gpu = safeFloatCast(vals[i])
+            elif (i == 12):
+                compute_mode = vals[i]
+        GPUs.append(GPU(deviceIds, uuid, gpuUtil, memTotal, memUsed, memFree, driver, gpu_name, serial, display_mode, display_active, temp_gpu, compute_mode))
     return GPUs  # (deviceIds, gpuUtil, memUtil)
 
 
-def getAvailable(order = 'first', limit=1, maxLoad=0.5, maxMemory=0.5, memoryFree=0, includeNan=False, excludeID=[], excludeUUID=[]):
+def getAvailable(order = 'first', limit=1, maxLoad=0.5, maxMemory=0.5, memoryFree=0, includeNan=False, excludeID=[], excludeUUID=[], excludeComputeMode=['Exclusive_Process']):
     # order = first | last | random | load | memory
     #    first --> select the GPU with the lowest ID (DEFAULT)
     #    last --> select the GPU with the highest ID
@@ -140,7 +142,7 @@ def getAvailable(order = 'first', limit=1, maxLoad=0.5, maxMemory=0.5, memoryFre
     GPUs = getGPUs()
 
     # Determine, which GPUs are available
-    GPUavailability = getAvailability(GPUs, maxLoad=maxLoad, maxMemory=maxMemory, memoryFree=memoryFree, includeNan=includeNan, excludeID=excludeID, excludeUUID=excludeUUID)
+    GPUavailability = getAvailability(GPUs, maxLoad=maxLoad, maxMemory=maxMemory, memoryFree=memoryFree, includeNan=includeNan, excludeID=excludeID, excludeUUID=excludeUUID, excludeComputeMode=excludeComputeMode)
     availAbleGPUindex = [idx for idx in range(0,len(GPUavailability)) if (GPUavailability[idx] == 1)]
     # Discard unavailable GPUs
     GPUs = [GPUs[g] for g in availAbleGPUindex]
@@ -172,12 +174,12 @@ def getAvailable(order = 'first', limit=1, maxLoad=0.5, maxMemory=0.5, memoryFre
 #        if (GPUs[i].load < maxLoad or (includeNan and np.isnan(GPUs[i].load))) and (GPUs[i].memoryUtil < maxMemory  or (includeNan and np.isnan(GPUs[i].memoryUtil))):
 #            GPUavailability[i] = 1
 
-def getAvailability(GPUs, maxLoad=0.5, maxMemory=0.5, memoryFree=0, includeNan=False, excludeID=[], excludeUUID=[]):
+def getAvailability(GPUs, maxLoad=0.5, maxMemory=0.5, memoryFree=0, includeNan=False, excludeID=[], excludeUUID=[], excludeComputeMode=['Exclusive_Process']):
     # Determine, which GPUs are available
-    GPUavailability = [1 if (gpu.memoryFree>=memoryFree) and (gpu.load < maxLoad or (includeNan and math.isnan(gpu.load))) and (gpu.memoryUtil < maxMemory  or (includeNan and math.isnan(gpu.memoryUtil))) and ((gpu.id not in excludeID) and (gpu.uuid not in excludeUUID)) else 0 for gpu in GPUs]
+    GPUavailability = [1 if (gpu.memoryFree>=memoryFree) and (gpu.load < maxLoad or (includeNan and math.isnan(gpu.load))) and (gpu.memoryUtil < maxMemory  or (includeNan and math.isnan(gpu.memoryUtil))) and ((gpu.id not in excludeID) and (gpu.uuid not in excludeUUID) and (gpu.compute_mode not in excludeComputeMode)) else 0 for gpu in GPUs]
     return GPUavailability
 
-def getFirstAvailable(order = 'first', maxLoad=0.5, maxMemory=0.5, attempts=1, interval=900, verbose=False, includeNan=False, excludeID=[], excludeUUID=[]):
+def getFirstAvailable(order = 'first', maxLoad=0.5, maxMemory=0.5, attempts=1, interval=900, verbose=False, includeNan=False, excludeID=[], excludeUUID=[], excludeComputeMode=['Exclusive_Process']):
     #GPUs = getGPUs()
     #firstAvailableGPU = np.NaN
     #for i in range(len(GPUs)):
@@ -189,7 +191,7 @@ def getFirstAvailable(order = 'first', maxLoad=0.5, maxMemory=0.5, attempts=1, i
         if (verbose):
             print('Attempting (' + str(i+1) + '/' + str(attempts) + ') to locate available GPU.')
         # Get first available GPU
-        available = getAvailable(order=order, limit=1, maxLoad=maxLoad, maxMemory=maxMemory, includeNan=includeNan, excludeID=excludeID, excludeUUID=excludeUUID)
+        available = getAvailable(order=order, limit=1, maxLoad=maxLoad, maxMemory=maxMemory, includeNan=includeNan, excludeID=excludeID, excludeUUID=excludeUUID, excludeComputeMode=excludeComputeMode)
         # If an available GPU was found, break for loop.
         if (available):
             if (verbose):
@@ -210,10 +212,10 @@ def showUtilization(all=False, attrList=None, useOldCode=False):
     GPUs = getGPUs()
     if (all):
         if (useOldCode):
-            print(' ID | Name | Serial | UUID || GPU util. | Memory util. || Memory total | Memory used | Memory free || Display mode | Display active |')
+            print(' ID | Name | Serial | UUID || GPU util. | Memory util. || Memory total | Memory used | Memory free || Display mode | Display active | Compute Mode')
             print('------------------------------------------------------------------------------------------------------------------------------')
             for gpu in GPUs:
-                print(' {0:2d} | {1:s}  | {2:s} | {3:s} || {4:3.0f}% | {5:3.0f}% || {6:.0f}MB | {7:.0f}MB | {8:.0f}MB || {9:s} | {10:s}'.format(gpu.id,gpu.name,gpu.serial,gpu.uuid,gpu.load*100,gpu.memoryUtil*100,gpu.memoryTotal,gpu.memoryUsed,gpu.memoryFree,gpu.display_mode,gpu.display_active))
+                print(' {0:2d} | {1:s}  | {2:s} | {3:s} || {4:3.0f}% | {5:3.0f}% || {6:.0f}MB | {7:.0f}MB | {8:.0f}MB || {9:s} | {10:s} | {11:s}'.format(gpu.id,gpu.name,gpu.serial,gpu.uuid,gpu.load*100,gpu.memoryUtil*100,gpu.memoryTotal,gpu.memoryUsed,gpu.memoryFree,gpu.display_mode,gpu.display_active, gpu.compute_mode))
         else:
             attrList = [[{'attr':'id','name':'ID'},
                          {'attr':'name','name':'Name'},
@@ -226,7 +228,8 @@ def showUtilization(all=False, attrList=None, useOldCode=False):
                          {'attr':'memoryUsed','name':'Memory used','suffix':'MB','precision':0},
                          {'attr':'memoryFree','name':'Memory free','suffix':'MB','precision':0}],
                         [{'attr':'display_mode','name':'Display mode'},
-                         {'attr':'display_active','name':'Display active'}]]
+                         {'attr':'display_active','name':'Display active'}],
+                        [{'attr':'compute_mode','name':'Compute mode'}]]
         
     else:
         if (useOldCode):
